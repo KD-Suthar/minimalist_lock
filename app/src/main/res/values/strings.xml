@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">MinimalLock</string>
+    <string name="a11y_desc">Detects which app is open so your own daily limits can be enforced, shows the time-left counter, and blocks Shorts and Reels screens. Nothing leaves your phone.</string>
+</resources>
