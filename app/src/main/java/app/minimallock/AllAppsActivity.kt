@@ -2,6 +2,7 @@ package app.minimallock
 
 import android.app.Activity
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
@@ -13,7 +14,7 @@ import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.TextView
 
-/** Text-only list of all apps with search. Enter opens the first match. */
+/** Small, quiet text list of all apps with search. Enter opens the first match. */
 class AllAppsActivity : Activity() {
 
     private var all: List<Apps.App> = emptyList()
@@ -28,19 +29,22 @@ class AllAppsActivity : Activity() {
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
         root.setBackgroundColor(Color.BLACK)
-        root.setPadding(Ui.dp(this, 24), Ui.dp(this, 48), Ui.dp(this, 24), Ui.dp(this, 8))
+        root.setPadding(Ui.dp(this, 28), Ui.dp(this, 48), Ui.dp(this, 28), Ui.dp(this, 8))
 
         val et = EditText(this)
         et.hint = "search"
         et.setSingleLine(true)
         et.setTextColor(Color.WHITE)
         et.setHintTextColor(Ui.GRAY)
-        et.textSize = 22f
+        et.textSize = 16f
+        et.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
         et.imeOptions = EditorInfo.IME_ACTION_GO
         root.addView(et)
 
         val lv = ListView(this)
         lv.divider = null
+        lv.setSelector(android.R.color.transparent)
+        val pad = Ui.dp(this, 11)
         adapter = object : ArrayAdapter<String>(
             this,
             android.R.layout.simple_list_item_1,
@@ -49,7 +53,10 @@ class AllAppsActivity : Activity() {
             override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
                 val v = super.getView(position, convertView, parent) as TextView
                 v.setTextColor(Color.WHITE)
-                v.textSize = 22f
+                v.textSize = 17f
+                v.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+                v.minHeight = 0
+                v.setPadding(0, pad, 0, pad)
                 return v
             }
         }

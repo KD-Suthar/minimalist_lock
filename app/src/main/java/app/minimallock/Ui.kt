@@ -71,6 +71,13 @@ object Ui {
         return if (h > 0) "${h}h ${m.toString().padStart(2, '0')}m" else "${m}m"
     }
 
+    /** Minutes after midnight as HH:mm. */
+    fun hm(min: Int): String = String.format(java.util.Locale.US, "%02d:%02d", min / 60, min % 60)
+
+    /** Epoch millis as HH:mm in local time. */
+    fun clockTime(ms: Long): String =
+        java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ms))
+
     fun register(ctx: Context, r: BroadcastReceiver, f: IntentFilter) {
         if (Build.VERSION.SDK_INT >= 33) {
             ctx.registerReceiver(r, f, Context.RECEIVER_NOT_EXPORTED)

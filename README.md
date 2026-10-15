@@ -1,8 +1,8 @@
 # MinimalLock
 
 A minimalist Android launcher that limits your own phone use. Black home screen with a round clock,
-daily time limits per app and for the whole phone, a pause before distracting apps, Shorts/Reels
-blocking, and notification digests.
+daily time limits, long-session locks, a night block, Reels/Shorts blocking, a pause before
+distracting apps, and notification digests.
 
 Made for sideloading on your own phone. It is not built for the Play Store (it uses an accessibility
 service, which Play restricts).
@@ -14,30 +14,46 @@ service, which Play restricts).
   (see `.github/workflows/build.yml`, step "Privacy check").
 - **No accounts, analytics, ads, crash reporters or third-party libraries.** The app has zero dependencies.
 - **Backup is off** (`allowBackup=false`), so settings don't go to cloud backup either.
-- **What is kept on the phone** (private app storage): your limits, your app lists, how many times you
-  opened a limited app today, and whether you used today's emergency unlock.
+- **What is kept on the phone** (private app storage): your limits and rules, your app lists, how many
+  times you opened a limited app today, until when a session-locked app stays locked, and whether you
+  used today's emergency unlock.
 - **What is never kept:** notification text, screen text, what you typed in the pause screen, or any
   history of what you did.
 - The accessibility service reads only the package name of the app in front and, inside YouTube and
-  Instagram, the view ids on screen to spot Shorts/Reels. The notification service reads only the
-  app's package name and a few system flags, then uses Android's built-in snooze.
+  Instagram, the view ids on screen (and whether a "Reels"/"Shorts" tab is selected) to spot
+  Shorts/Reels. The notification service reads only the app's package name and a few system flags,
+  then uses Android's built-in snooze.
 - The code is small. Read it before you install it.
+
+## How it works
+
+1. Install it and set it as your home app (the Setup screen walks you through it).
+2. **Nothing is limited until you press Activate.** Before that, every app opens normally and you can
+   change any setting freely.
+3. Once active, opening Settings or Exit takes a 20 second wait ("Changing settings - it's not that
+   easy"), then stays open for 10 minutes.
 
 ## Features
 
-- Black home screen, round clock, date, "phone time left" counter, favorites, swipe up for all apps
-  (search, Enter opens the first match), hold anywhere for settings.
-- Daily limit per app and for the whole phone. At the limit the app (or every non-necessity) is locked
-  until midnight. A small counter shows time left while you use an app.
-- Necessities (phone, messages, camera, maps, clock, settings, payments, authenticator ...) are never
-  blocked and don't count. The picker only offers necessity-type apps.
-- Pause before limited apps: 10s, growing +10s per open that day (max 60s); from the 4th open
+- **Home screen:** black, round analog clock with the day and digital time inside it, phone-time-left
+  line, favorites, and a bottom bar: **All apps**, **Settings**, **Exit**. Swipe left anywhere also
+  opens all apps (text list with search, Enter opens the first match).
+- **Daily limits:** per app and for the whole phone. At the limit the app (or every non-necessity) is
+  locked until midnight. A small counter shows time left while you use an app. Limits are checked on
+  the exact moment they run out, even if the app was already open.
+- **Session lock:** e.g. 20 minutes in a row in Instagram or YouTube, then that app is locked for
+  90 minutes. App, session length, lock length and what counts as a "break" are all editable.
+- **Night block:** pick the hours (default 22:00 to 05:00) and any list of apps; they cannot be opened
+  during that time. The emergency pass does not open them.
+- **Reels and Shorts:** a switch in Settings. When on, it sends you back when a Reels or Shorts screen
+  appears in Instagram or YouTube.
+- **Pause before limited apps:** 10s, growing +10s per open that day (max 60s); from the 4th open
   you must also type a reason.
-- Blocks YouTube Shorts and Instagram Reels (sends you back when it detects them).
-- Notification filter: apps not on your list are delayed to digest times (default 9, 13, 18, 21).
-- Emergency unlock: once a day, 60s wait, type a phrase, 5 minutes of freedom.
-- Settings take 15s to open, so you can't casually loosen your own limits.
-- Battery: no polling while the screen is off or no tracked app is open; content events are only
+- **Notification filter:** apps not on your list are delayed to digest times (default 9, 13, 18, 21).
+- **Necessities** (phone, messages, camera, maps, clock, settings, payments, authenticator ...) are
+  never blocked and don't count. The picker only offers necessity-type apps.
+- **Emergency unlock:** once a day, 60s wait, type a phrase, 5 minutes of freedom (not for night block).
+- **Battery:** no polling while the screen is off or no tracked app is open; content events are only
   listened to inside YouTube/Instagram.
 
 ## Get the APK (no Android Studio needed)
@@ -51,7 +67,9 @@ service, which Play restricts).
 4. Open the finished run and download **MinimalLock-debug-apk** at the bottom. Unzip it to get
    `app-debug.apk`, copy it to the phone, and install it (allow "install unknown apps" when asked).
 
-If the build fails, open the failed step, copy the red error text, and send it to whoever maintains this.
+Each GitHub build is signed with a fresh key, so uninstall the previous version before installing a new
+one (settings are reset). If the build fails, open the failed step, copy the red error text, and send
+it to whoever maintains this.
 
 ## Setup on the phone
 
@@ -71,18 +89,20 @@ OnePlus: also allow Auto-launch and set Battery to Unrestricted, or the phone ma
 
 ## Tuning Shorts/Reels detection
 
-Detection works by matching view ids inside the YouTube and Instagram apps. Those ids can change
-when the apps update. If it stops working or never worked on your version:
+Detection works by matching view ids (and a selected "Reels"/"Shorts" tab) inside the YouTube and
+Instagram apps. Those can change when the apps update. If it stops working or never worked on your
+version:
 
-Settings > **Capture screen ids**, open Reels or Shorts and keep it on screen for 25 seconds, then
-Settings > **Show captured ids** and copy them. Add the right ones to `ytIds` / `igIds` in
+Settings > **Capture screen ids**, open Reels or Shorts and keep it on screen for 40 seconds, then
+Settings > **Show captured ids** and copy them. Add the right ones to `ytTokens` / `igTokens` in
 `BlockerService.kt`.
 
 ## Known limits
 
 - No Android blocker is unbypassable: you can always switch the accessibility service off in Settings.
   This is "annoying enough", not a vault.
-- Changes to limits take effect immediately; the 15s wait is the only guard.
+- Session timing is kept in memory; if Android restarts the service, the current session starts over
+  (locks that were already set are kept).
 
 ## License
 

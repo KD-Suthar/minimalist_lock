@@ -12,7 +12,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 
-/** Shown when an app (or the whole phone) is out of time for today. */
+/** Shown when an app (or the whole phone) is closed: daily limit, session lock, or night block. */
 class BlockActivity : Activity() {
 
     private var timer: CountDownTimer? = null
@@ -23,6 +23,33 @@ class BlockActivity : Activity() {
         val store = Store(this)
         val pkg = intent.getStringExtra("pkg") ?: ""
         val why = intent.getStringExtra("why") ?: "app"
+        val name = Apps.label(this, pkg)
+
+        val title: String
+        val msg: String
+        val sub: String
+        when (why) {
+            "session" -> {
+                title = "Take a break"
+                msg = "$name is on a break.\nBack at ${Ui.clockTime(store.lockUntil(pkg))}"
+                sub = "You were in it for a long stretch."
+            }
+            "night" -> {
+                title = "Good night"
+                msg = "$name is closed for the night.\nBack at ${Ui.hm(store.nightEndMin)}"
+                sub = "Night block is on."
+            }
+            "phone" -> {
+                title = "Done for today"
+                msg = "Your phone time for today is used up."
+                sub = "Back tomorrow. Resets at midnight."
+            }
+            else -> {
+                title = "Done for today"
+                msg = "$name: today's limit is used up."
+                sub = "Back tomorrow. Resets at midnight."
+            }
+        }
 
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
@@ -30,16 +57,16 @@ class BlockActivity : Activity() {
         root.setBackgroundColor(Color.BLACK)
         root.setPadding(Ui.dp(this, 32), Ui.dp(this, 32), Ui.dp(this, 32), Ui.dp(this, 32))
 
-        root.addView(Ui.text(this, "Done for today", 30f))
-        val msg = if (why == "phone") {
-            "Your phone time for today is used up."
-        } else {
-            Apps.label(this, pkg) + ": today's limit is used up."
-        }
-        val m = Ui.text(this, msg, 17f)
+        val titleTv = Ui.text(this, title, 28f)
+        titleTv.gravity = Gravity.CENTER
+        root.addView(titleTv)
+        val m = Ui.text(this, msg, 16f)
+        m.gravity = Gravity.CENTER
         m.setPadding(0, Ui.dp(this, 16), 0, Ui.dp(this, 4))
         root.addView(m)
-        root.addView(Ui.text(this, "Back tomorrow. Resets at midnight.", 14f, Ui.GRAY))
+        val s = Ui.text(this, sub, 13f, Ui.GRAY)
+        s.gravity = Gravity.CENTER
+        root.addView(s)
 
         val ok = Ui.button(this, "OK") { goHome() }
         val okLp = LinearLayout.LayoutParams(
@@ -49,7 +76,8 @@ class BlockActivity : Activity() {
         okLp.topMargin = Ui.dp(this, 32)
         root.addView(ok, okLp)
 
-        if (store.emergencyAvailable()) {
+        // The emergency pass is for real emergencies; it never opens the night block.
+        if (why != "night" && store.emergencyAvailable()) {
             val phrase = "I need this now"
             val panel = LinearLayout(this)
             panel.orientation = LinearLayout.VERTICAL
@@ -63,6 +91,8 @@ class BlockActivity : Activity() {
             typed.setSingleLine(true)
             val confirm: TextView = Ui.button(this, "Unlock for 5 minutes") {
                 store.useEmergency(5)
+                // A session lock must not outlive the pass.
+                store.setLock(pkg, 0L)
                 Toast.makeText(this, "Unlocked for 5 minutes", Toast.LENGTH_SHORT).show()
                 finish()
             }

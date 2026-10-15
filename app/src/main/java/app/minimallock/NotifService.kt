@@ -19,7 +19,7 @@ class NotifService : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         if (sbn == null) return
         val store = Store(this)
-        if (!store.notifFilterOn) return
+        if (!store.active || !store.notifFilterOn) return
 
         val pkg = sbn.packageName
         if (pkg == packageName) return

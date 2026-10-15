@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- clock ring -->
+    <path
+        android:pathData="M32,54 a22,22 0 1,0 44,0 a22,22 0 1,0 -44,0"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3" />
+
+    <!-- 12, 3, 6, 9 ticks -->
+    <path
+        android:pathData="M54,33.5 L54,37 M74.5,54 L71,54 M54,74.5 L54,71 M33.5,54 L37,54"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round" />
+
+    <!-- hour hand and minute hand (10:10) -->
+    <path
+        android:pathData="M54,54 L45,47"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M54,54 L65,45"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round" />
+
+    <!-- center dot -->
+    <path
+        android:pathData="M51.5,54 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0"
+        android:fillColor="#FFFFFF" />
+</vector>

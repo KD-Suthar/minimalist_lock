@@ -21,12 +21,15 @@ import android.widget.Toast
 import java.util.TreeSet
 
 /**
- * The enforcement engine. It only reads: the package name of the window in front, and (inside
- * YouTube / Instagram only) the view ids on screen to spot Shorts / Reels. It never reads or stores
- * on-screen text, and the app has no network permission.
+ * The enforcement engine. It does nothing until you press Activate.
+ *
+ * It only reads: the package name of the window in front, and (inside YouTube / Instagram only) the
+ * view ids on screen to spot Shorts / Reels. It never stores on-screen text, and the app has no
+ * network permission.
  *
  * Battery: only window-change events are received normally. Content-change events are switched on
- * only while YouTube or Instagram is in front, and everything stops when the screen turns off.
+ * only while YouTube or Instagram is in front, the next check is scheduled for the exact moment a
+ * limit would run out (max every 15 s), and everything stops when the screen turns off.
  */
 class BlockerService : AccessibilityService() {
 
@@ -47,23 +50,21 @@ class BlockerService : AccessibilityService() {
         private fun hasGrace(pkg: String): Boolean =
             synchronized(grace) { (grace[pkg] ?: 0L) > System.currentTimeMillis() }
 
-        // View ids that appear on Shorts / Reels screens. These can change when the apps update;
-        // use Settings > "Capture screen ids" to find the current ones.
-        private val ytIds = listOf(
-            "com.google.android.youtube:id/reel_recycler",
-            "com.google.android.youtube:id/reel_player_page_container",
-            "com.google.android.youtube:id/reel_watch_player",
-            "com.google.android.youtube:id/shorts_player"
+        // Pieces of view ids that appear on Shorts / Reels screens. Matched as "contains", so small
+        // renames still work. If they stop working after an app update, use Settings > "Capture
+        // screen ids" to see the current ones.
+        private val ytTokens = listOf(
+            "reel_recycler", "reel_player_page", "reel_watch", "shorts_player", "shorts_container"
         )
-        private val igIds = listOf(
-            "com.instagram.android:id/clips_viewer_view_pager",
-            "com.instagram.android:id/clips_swipe_refresh_container",
-            "com.instagram.android:id/root_clips_layout",
-            "com.instagram.android:id/clips_video_container"
+        private val igTokens = listOf(
+            "clips_viewer", "clips_swipe", "clips_video_container", "root_clips"
         )
     }
 
-    private class Status(val appLeft: Long?, val phoneLeft: Long?)
+    private class Scan {
+        val ids = TreeSet<String>()
+        var tabSelected = false
+    }
 
     private lateinit var store: Store
     private val handler = Handler(Looper.getMainLooper())
@@ -75,17 +76,18 @@ class BlockerService : AccessibilityService() {
     private var lastBlockAt = 0L
     private var lastFrictionAt = 0L
     private var lastScan = 0L
+    private var lastQuick = 0L
     private var lastShortsAction = 0L
+    private var shortsHits = 0
     private var dumpUntil = 0L
     private var homeSet: Set<String> = emptySet()
     private var homeAt = 0L
 
-    private val poll = object : Runnable {
-        override fun run() {
-            refresh()
-            if (tracking) handler.postDelayed(this, 15_000L)
-        }
-    }
+    // Continuous-session bookkeeping (memory only; a restart simply starts fresh sessions).
+    private val sessAccum = HashMap<String, Long>()
+    private val sessLast = HashMap<String, Long>()
+
+    private val poll = Runnable { refresh() }
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
@@ -189,8 +191,10 @@ class BlockerService : AccessibilityService() {
 
     private fun onForeground(pkg: String) {
         current = pkg
-        configure(pkg == YT || pkg == IG)
-        if (isHome(pkg) || store.isEssential(pkg)) {
+        val wantContent = (pkg == YT || pkg == IG) &&
+            (store.active || System.currentTimeMillis() < dumpUntil)
+        configure(wantContent)
+        if (!store.active || isHome(pkg) || store.isEssential(pkg)) {
             stopTracking()
             return
         }
@@ -207,67 +211,130 @@ class BlockerService : AccessibilityService() {
         onForeground(pkg)
     }
 
-    // ------------------------------------------------------------------ limits
+    // ------------------------------------------------------------------ rules
 
-    private fun status(pkg: String): Status {
-        val r = Usage.compute(this, store.essentials())
-        val lim = store.appLimits()[pkg]
-        val appLeft = if (lim != null && lim > 0) lim * 60_000L - (r.perApp[pkg] ?: 0L) else null
-        val pl = store.phoneLimitMin
-        val phoneLeft = if (pl > 0) pl * 60_000L - r.total else null
-        return Status(appLeft, phoneLeft)
-    }
-
-    private fun evaluate(pkg: String, fromForeground: Boolean) {
-        if (!Perms.usage(this)) {
+    /**
+     * Applies every rule to the app in front. Returns true if it stepped in (blocked it or showed the pause).
+     * Order: night block, emergency pass, running session lock, daily app limit, daily phone limit,
+     * session length, pause screen, then the small counter.
+     */
+    private fun evaluate(pkg: String, fromForeground: Boolean): Boolean {
+        if (!store.active || !Perms.usage(this)) {
             stopTracking()
-            return
+            return false
         }
+        val now = System.currentTimeMillis()
+
+        val nightApp = pkg in store.nightApps()
+        if (nightApp && store.isNight(now)) {
+            blockNow(pkg, "night")
+            return true
+        }
+
         if (store.emergencyActive()) {
             showChip("Emergency pass")
-            startTracking()
-            return
+            schedule(15_000L)
+            return false
         }
-        val s = status(pkg)
-        val appLeft = s.appLeft
-        val phoneLeft = s.phoneLeft
-        val appOver = appLeft != null && appLeft <= 0
-        val phoneOver = phoneLeft != null && phoneLeft <= 0
-        if (appOver || phoneOver) {
-            blockNow(pkg, if (appOver) "app" else "phone")
-            return
+
+        if (now < store.lockUntil(pkg)) {
+            blockNow(pkg, "session")
+            return true
         }
-        if (fromForeground && store.frictionOn &&
-            store.appLimits().containsKey(pkg) && !hasGrace(pkg)
-        ) {
+
+        val r = Usage.compute(this, store.essentials())
+        val lim = store.appLimits()[pkg]
+        val appLeft: Long? =
+            if (lim != null && lim > 0) lim * 60_000L - (r.perApp[pkg] ?: 0L) else null
+        val pl = store.phoneLimitMin
+        val phoneLeft: Long? = if (pl > 0) pl * 60_000L - r.total else null
+
+        if (appLeft != null && appLeft <= 0) {
+            blockNow(pkg, "app")
+            return true
+        }
+        if (phoneLeft != null && phoneLeft <= 0) {
+            blockNow(pkg, "phone")
+            return true
+        }
+
+        val rule = store.sessionRules()[pkg]
+        var sessLeft: Long? = null
+        if (rule != null) {
+            val used = sessionStep(pkg, now, fromForeground)
+            val left = rule.sessionMin * 60_000L - used
+            if (left <= 0) {
+                store.setLock(pkg, now + rule.lockMin * 60_000L)
+                sessAccum.remove(pkg)
+                sessLast.remove(pkg)
+                blockNow(pkg, "session")
+                return true
+            }
+            sessLeft = left
+        }
+
+        val watched = lim != null || rule != null
+        if (fromForeground && store.frictionOn && watched && !hasGrace(pkg)) {
             showFriction(pkg)
-            return
+            return true
         }
+
         val parts = ArrayList<String>()
-        if (appLeft != null) parts.add("App " + Ui.fmt(appLeft))
-        if (phoneLeft != null) parts.add("Phone " + Ui.fmt(phoneLeft))
-        if (parts.isEmpty()) {
-            stopTracking()
-            return
+        var next = 15_000L
+        if (appLeft != null) {
+            parts.add("App " + Ui.fmt(appLeft))
+            next = minOf(next, appLeft)
         }
-        showChip(parts.joinToString("  |  "))
-        startTracking()
+        if (phoneLeft != null) {
+            parts.add("Phone " + Ui.fmt(phoneLeft))
+            next = minOf(next, phoneLeft)
+        }
+        if (sessLeft != null) {
+            parts.add("Session " + Ui.fmt(sessLeft))
+            next = minOf(next, sessLeft)
+        }
+        var needTrack = parts.isNotEmpty()
+        if (nightApp && store.nightOn) {
+            next = minOf(next, store.msUntilNight(now))
+            needTrack = true
+        }
+        if (!needTrack) {
+            stopTracking()
+            return false
+        }
+        if (parts.isEmpty()) hideChip() else showChip(parts.joinToString("  |  "))
+        schedule(maxOf(next + 400L, 1000L))
+        return false
+    }
+
+    /** Active time in the current continuous session. A break longer than the "session break" starts a new one. */
+    private fun sessionStep(pkg: String, now: Long, fromForeground: Boolean): Long {
+        val gap = store.sessionGapMin * 60_000L
+        val last = sessLast[pkg]
+        var acc = sessAccum[pkg] ?: 0L
+        if (last == null || now - last > gap) {
+            acc = 0L
+        } else if (!fromForeground && now - last <= 30_000L) {
+            acc += now - last
+        }
+        sessAccum[pkg] = acc
+        sessLast[pkg] = now
+        return acc
     }
 
     private fun refresh() {
         val pkg = current
-        if (pkg.isEmpty() || pkg == packageName || isHome(pkg) || store.isEssential(pkg)) {
+        if (!store.active || pkg.isEmpty() || pkg == packageName || isHome(pkg) || store.isEssential(pkg)) {
             stopTracking()
             return
         }
         evaluate(pkg, false)
     }
 
-    private fun startTracking() {
-        if (tracking) return
+    private fun schedule(ms: Long) {
         tracking = true
         handler.removeCallbacks(poll)
-        handler.postDelayed(poll, 15_000L)
+        handler.postDelayed(poll, ms)
     }
 
     private fun stopTracking() {
@@ -357,49 +424,77 @@ class BlockerService : AccessibilityService() {
     // ------------------------------------------------------------------ Shorts / Reels
 
     fun requestDump() {
-        dumpUntil = System.currentTimeMillis() + 25_000L
+        dumpUntil = System.currentTimeMillis() + 40_000L
     }
 
     private fun onContent(pkg: String) {
+        val dumping = System.currentTimeMillis() < dumpUntil
+        val active = store.active
+        if (!active && !dumping) return
         val now = SystemClock.uptimeMillis()
-        if (now - lastScan < 350L) return
-        lastScan = now
-        val root = rootInActiveWindow ?: return
-        if (root.packageName?.toString() != pkg) return
 
-        if (System.currentTimeMillis() < dumpUntil) {
-            val ids = TreeSet<String>()
-            collect(root, ids, 0, intArrayOf(3000))
-            store.setDump(pkg, ids.joinToString("\n"))
+        // While scrolling, re-check the limits every few seconds so an app that was already open
+        // cannot keep going past its time.
+        if (active && now - lastQuick > 4000L) {
+            lastQuick = now
+            if (evaluate(pkg, false)) return
         }
 
-        if (store.blockShorts && !store.emergencyActive() && detectShorts(root, pkg)) {
-            if (now - lastShortsAction > 1200L) {
-                lastShortsAction = now
-                performGlobalAction(GLOBAL_ACTION_BACK)
-                Toast.makeText(this, "Shorts and Reels are blocked", Toast.LENGTH_SHORT).show()
+        if (now - lastScan < 400L) return
+        lastScan = now
+        val watch = active && store.blockShorts && !store.emergencyActive()
+        if (!dumping && !watch) return
+
+        val root = rootInActiveWindow ?: return
+        if (root.packageName?.toString() != pkg) return
+        val scan = Scan()
+        walk(root, scan, 0, intArrayOf(900))
+        if (dumping) store.setDump(pkg, scan.ids.joinToString("\n"))
+
+        if (watch && isShorts(pkg, scan)) {
+            shortsHits++
+            if (shortsHits >= 2) {
+                val since = now - lastShortsAction
+                if (since > 900L) {
+                    // First time: Back. If it comes straight back, go Home instead of looping.
+                    performGlobalAction(if (since < 4000L) GLOBAL_ACTION_HOME else GLOBAL_ACTION_BACK)
+                    lastShortsAction = now
+                    shortsHits = 0
+                    Toast.makeText(this, "Reels and Shorts are blocked", Toast.LENGTH_SHORT).show()
+                }
             }
+        } else {
+            shortsHits = 0
         }
     }
 
-    private fun collect(n: AccessibilityNodeInfo?, out: MutableSet<String>, depth: Int, budget: IntArray) {
+    private fun isTabName(s: String?): Boolean {
+        if (s == null) return false
+        val x = s.trim().lowercase()
+        return x == "reels" || x == "shorts" || x == "reels tab" || x == "shorts tab"
+    }
+
+    private fun walk(n: AccessibilityNodeInfo?, s: Scan, depth: Int, budget: IntArray) {
         if (n == null || depth > 40 || budget[0] <= 0) return
         budget[0]--
         if (!n.isVisibleToUser) return
         val id = n.viewIdResourceName
-        if (id != null) out.add(id)
-        for (i in 0 until n.childCount) collect(n.getChild(i), out, depth + 1, budget)
+        if (id != null) s.ids.add(id)
+        if (n.isSelected) {
+            if (isTabName(n.contentDescription?.toString()) || isTabName(n.text?.toString())) {
+                s.tabSelected = true
+            }
+        }
+        for (i in 0 until n.childCount) walk(n.getChild(i), s, depth + 1, budget)
     }
 
-    private fun detectShorts(root: AccessibilityNodeInfo, pkg: String): Boolean {
-        val ids = if (pkg == YT) ytIds else igIds
-        for (id in ids) {
-            val nodes = root.findAccessibilityNodeInfosByViewId(id)
-            if (nodes != null && nodes.any { it.isVisibleToUser }) return true
-        }
-        if (pkg == IG) {
-            val tabs = root.findAccessibilityNodeInfosByViewId("com.instagram.android:id/clips_tab")
-            if (tabs != null && tabs.any { it.isSelected }) return true
+    private fun isShorts(pkg: String, s: Scan): Boolean {
+        if (s.tabSelected) return true
+        val tokens = if (pkg == YT) ytTokens else igTokens
+        for (id in s.ids) {
+            for (t in tokens) {
+                if (id.contains(t, ignoreCase = true)) return true
+            }
         }
         return false
     }

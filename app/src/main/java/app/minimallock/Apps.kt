@@ -65,6 +65,18 @@ object Apps {
         }
     }
 
+    /** Leaves MinimalLock: opens Android's "Default home app" screen so you can pick another launcher. */
+    fun exitLauncher(ctx: Context) {
+        try {
+            ctx.startActivity(Intent(Settings.ACTION_HOME_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+            try {
+                ctx.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (e2: Exception) {
+            }
+        }
+    }
+
     private fun resolve(ctx: Context, i: Intent): String? {
         val ri = ctx.packageManager.resolveActivity(i, PackageManager.MATCH_DEFAULT_ONLY)
         val p = ri?.activityInfo?.packageName
@@ -97,7 +109,32 @@ object Apps {
         }
     }
 
+    // Typical doom-scroll apps. Only the installed ones are used, and the list is editable in Settings.
+    private val social = listOf(
+        "com.instagram.android",
+        "com.google.android.youtube",
+        "com.facebook.katana",
+        "com.facebook.lite",
+        "com.twitter.android",
+        "com.snapchat.android",
+        "com.reddit.frontpage",
+        "in.mohalla.sharechat",
+        "in.mohalla.video"
+    )
+
+    private fun ensureSocialDefaults(ctx: Context, store: Store) {
+        if (store.defaults2) return
+        val launch = launchable(ctx).map { it.pkg }.toSet()
+        if (launch.isEmpty()) return
+        store.setNightApps(social.filter { it in launch }.toSet())
+        for (p in listOf("com.instagram.android", "com.google.android.youtube")) {
+            if (p in launch) store.setSessionRule(p, 20, 90)
+        }
+        store.defaults2 = true
+    }
+
     fun ensureDefaults(ctx: Context, store: Store) {
+        ensureSocialDefaults(ctx, store)
         if (store.defaultsDone) return
         val launch = launchable(ctx).map { it.pkg }.toSet()
         if (launch.isEmpty()) return
